@@ -196,6 +196,185 @@ done:
 	return ret;
 }
 
+static const struct ea_struct *find_ea(union smb_fileinfo *finfo,
+				       const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; i < finfo->all_eas.out.num_eas; i++) {
+		const struct ea_struct *ea = &finfo->all_eas.out.eas[i];
+
+		if ((ea->name.s != NULL) && strequal(ea->name.s, name)) {
+			return ea;
+		}
+	}
+	return NULL;
+}
+
+static const struct stream_struct *find_stream(union smb_fileinfo *finfo,
+					       const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; i < finfo->stream_info.out.num_streams; i++) {
+		const struct stream_struct *s =
+			&finfo->stream_info.out.streams[i];
+
+		if ((s->stream_name.s != NULL) &&
+		    strequal(s->stream_name.s, name)) {
+			return s;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * With "streams_xattr:prefix = user." streams are also visible as EAs,
+ * which shows the raw xattr: the stream data plus a trailing 0 byte, or
+ * exactly the stream data with "streams_xattr:xattr_compat = yes".
+ */
+static bool test_streams_raw_xattr(struct torture_context *tctx,
+				   struct smb2_tree *tree)
+{
+	bool xattr_compat = torture_setting_bool(tctx, "xattr_compat", false);
+	size_t marker = xattr_compat ? 0 : 1;
+	const char *fname = BASEDIR "\\testfile";
+	const char *smb_sname = BASEDIR "\\testfile:smb";
+	const char *ea_sname = BASEDIR "\\testfile:ea";
+	const char *empty_sname = BASEDIR "\\testfile:empty";
+	struct smb2_handle h = {{0}};
+	struct smb2_handle sh = {{0}};
+	union smb_fileinfo finfo;
+	union smb_setfileinfo sfinfo;
+	struct ea_struct ea;
+	const struct ea_struct *found_ea = NULL;
+	const struct stream_struct *found_stream = NULL;
+	char *data = NULL;
+	size_t data_sz;
+	NTSTATUS status;
+	bool ok;
+	bool ret = true;
+
+	ok = smb2_util_setup_dir(tctx, tree, BASEDIR);
+	torture_assert_goto(tctx, ok, ret, done, "Unable to setup testdir\n");
+
+	status = torture_smb2_testfile(tree, fname, &h);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"torture_smb2_testfile\n");
+
+	torture_comment(tctx, "Stream written via SMB, read as EA\n");
+
+	status = torture_smb2_testfile(tree, smb_sname, &sh);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"torture_smb2_testfile\n");
+	status = smb2_util_write(tree, sh, "hello", 0, 5);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"stream write\n");
+	smb2_util_close(tree, sh);
+	ZERO_STRUCT(sh);
+
+	ZERO_STRUCT(finfo);
+	finfo.generic.level = RAW_FILEINFO_SMB2_ALL_EAS;
+	finfo.generic.in.file.handle = h;
+	status = smb2_getinfo_file(tree, tctx, &finfo);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"getinfo ALL_EAS\n");
+
+	found_ea = find_ea(&finfo, "smb");
+	torture_assert_goto(tctx, found_ea != NULL, ret, done,
+			    "stream not visible as EA\n");
+	torture_assert_int_equal_goto(tctx, found_ea->value.length, 5 + marker,
+				      ret, done, "EA length\n");
+	torture_assert_mem_equal_goto(tctx, found_ea->value.data, "hello", 5,
+				      ret, done, "EA data\n");
+	if (!xattr_compat) {
+		torture_assert_int_equal_goto(tctx, found_ea->value.data[5], 0,
+					      ret, done, "trailing byte\n");
+	}
+
+	/*
+	 * In the default format the EA must carry the trailing 0 byte
+	 * as well: it holds the number of extents, anything else is
+	 * not a valid stream.
+	 */
+	torture_comment(tctx, "EA written via SMB, read as stream\n");
+
+	ZERO_STRUCT(ea);
+	ea.name.s = "ea";
+	ea.name.private_length = strlen("ea") + 1;
+	ea.value = data_blob_const("world", 5 + marker);
+
+	ZERO_STRUCT(sfinfo);
+	sfinfo.generic.level = RAW_SFILEINFO_FULL_EA_INFORMATION;
+	sfinfo.generic.in.file.handle = h;
+	sfinfo.full_ea_information.in.eas.num_eas = 1;
+	sfinfo.full_ea_information.in.eas.eas = &ea;
+	status = smb2_setinfo_file(tree, &sfinfo);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"setinfo FULL_EA_INFORMATION\n");
+
+	status = torture_smb2_open(tree, ea_sname, SEC_FILE_READ_DATA, &sh);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"EA not visible as stream\n");
+	ok = read_stream(tctx, tctx, tree, &sh, 0, 64, &data, &data_sz);
+	if (!ok) {
+		ret = false;
+		goto done;
+	}
+	torture_assert_int_equal_goto(tctx, data_sz, 5,
+				      ret, done, "stream length\n");
+	torture_assert_mem_equal_goto(tctx, data, "world", 5,
+				      ret, done, "stream data\n");
+	smb2_util_close(tree, sh);
+	ZERO_STRUCT(sh);
+
+	torture_comment(tctx, "Empty stream\n");
+
+	status = torture_smb2_testfile(tree, empty_sname, &sh);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"torture_smb2_testfile\n");
+	smb2_util_close(tree, sh);
+	ZERO_STRUCT(sh);
+
+	torture_comment(tctx, "Stream list\n");
+
+	ZERO_STRUCT(finfo);
+	finfo.generic.level = RAW_FILEINFO_STREAM_INFORMATION;
+	finfo.generic.in.file.handle = h;
+	status = smb2_getinfo_file(tree, tctx, &finfo);
+	torture_assert_ntstatus_ok_goto(tctx, status, ret, done,
+					"getinfo STREAM_INFORMATION\n");
+
+	found_stream = find_stream(&finfo, ":smb:$DATA");
+	torture_assert_goto(tctx, found_stream != NULL, ret, done,
+			    "stream smb not listed\n");
+	torture_assert_int_equal_goto(tctx, found_stream->size, 5,
+				      ret, done, "stream smb size\n");
+
+	found_stream = find_stream(&finfo, ":ea:$DATA");
+	torture_assert_goto(tctx, found_stream != NULL, ret, done,
+			    "stream ea not listed\n");
+	torture_assert_int_equal_goto(tctx, found_stream->size, 5,
+				      ret, done, "stream ea size\n");
+
+	found_stream = find_stream(&finfo, ":empty:$DATA");
+	torture_assert_goto(tctx, found_stream != NULL, ret, done,
+			    "stream empty not listed\n");
+	torture_assert_int_equal_goto(tctx, found_stream->size, 0,
+				      ret, done, "stream empty size\n");
+
+done:
+	if (!smb2_util_handle_empty(sh)) {
+		smb2_util_close(tree, sh);
+	}
+	if (!smb2_util_handle_empty(h)) {
+		smb2_util_close(tree, h);
+	}
+	smb2_deltree(tree, BASEDIR);
+
+	return ret;
+}
+
 /*
    basic testing of vfs_streams_xattr
 */
@@ -206,6 +385,23 @@ struct torture_suite *torture_vfs_streams_xattr(TALLOC_CTX *ctx)
 	torture_suite_add_1smb2_test(suite, "streams-pwrite-hole", test_streams_pwrite_hole);
 
 	suite->description = talloc_strdup(suite, "vfs_streams_xattr tests");
+
+	return suite;
+}
+
+/*
+   vfs_streams_xattr with "streams_xattr:prefix = user.", the streams
+   are visible as EAs
+*/
+struct torture_suite *torture_vfs_streams_xattr_user_prefix(TALLOC_CTX *ctx)
+{
+	struct torture_suite *suite = torture_suite_create(
+		ctx, "streams_xattr_user_prefix");
+
+	torture_suite_add_1smb2_test(suite, "raw-xattr", test_streams_raw_xattr);
+
+	suite->description = talloc_strdup(
+		suite, "vfs_streams_xattr tests with prefix user.");
 
 	return suite;
 }

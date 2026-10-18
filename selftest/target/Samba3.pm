@@ -3642,6 +3642,16 @@ sub provision($$)
 	copy = tmp
 	vfs objects = streams_xattr xattr_tdb
 
+[streams_xattr_user_prefix]
+	copy = tmp
+	vfs objects = streams_xattr xattr_tdb
+	streams_xattr:prefix = user.
+	streams_xattr:store_stream_type = no
+
+[streams_xattr_compat]
+	copy = streams_xattr_user_prefix
+	streams_xattr:xattr_compat = yes
+
 [streams_xattr_nostrict]
 	copy = tmp
 	strict rename = no
