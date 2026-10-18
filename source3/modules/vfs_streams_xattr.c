@@ -1274,11 +1274,21 @@ static NTSTATUS walk_xattr_streams(vfs_handle_struct *handle,
 			continue;
 		}
 
+		/*
+		 * With a prefix like "user." the extents ("user.Ext.")
+		 * match the prefix too, they are not streams of their own.
+		 */
+		if ((config->max_extents > 0) &&
+		    (strncmp(names[i], config->ext_prefix,
+			     strlen(config->ext_prefix)) == 0)) {
+			continue;
+		}
+
 		ret = streams_xattr_get_ea_value_fsp(
 			names,
 			config,
 			smb_fname->fsp,
-			names[i] + strlen(SAMBA_XATTR_DOSSTREAM_PREFIX),
+			names[i] + config->prefix_len,
 			&val);
 		if (ret != 0) {
 			DBG_DEBUG("Could not get ea %s for file %s: %s\n",
