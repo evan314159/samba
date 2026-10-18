@@ -5,6 +5,7 @@
 # Fedora's own spec for exactly the samba in the base image, with Source0 swapped for this branch
 # (samba-4.24.7.tar.xz, from git archive in the workflow). Only streams_xattr.so goes into the
 # image; the image stage refuses to build if the base image's samba isn't the one built here.
+# Quay prunes samba-server digests once :latest moves on, so a rebuild may need a fresh pin.
 ARG SAMBA_NVR=4.24.7-1.fc44
 
 FROM fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80 AS builder
@@ -30,7 +31,7 @@ RUN cd /root/rpmbuild \
  && rpm2cpio /root/rpmbuild/RPMS/$(uname -m)/samba-${SAMBA_NVR}.$(uname -m).rpm \
     | cpio -idm --quiet ./usr/lib64/samba/vfs/streams_xattr.so
 
-FROM quay.io/samba.org/samba-server@sha256:df52dfd991b47b3861eb3605ca12c615dff0a3f1412dac23ad7fe1b78268649c AS image
+FROM quay.io/samba.org/samba-server@sha256:a1b3088f94ac428487599a294de48bb481ff63bc36fa7fb1e80e0e3bd755c885 AS image
 ARG SAMBA_NVR
 
 RUN v=$(rpm -q --qf '%{VERSION}-%{RELEASE}' samba) \
