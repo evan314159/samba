@@ -37,6 +37,7 @@ struct streams_xattr_config {
 	const char *ext_prefix;
 	size_t max_extents;
 	bool store_stream_type;
+	bool xattr_compat;
 };
 
 struct stream_io {
@@ -58,6 +59,14 @@ struct stream_io {
  * last byte. If there are additional "extents", this last byte stores
  * the number of extents. The extents don't come with the appended
  * byte, we just don't store an xattr if not required.
+ *
+ * With "streams_xattr:xattr_compat = yes" the xattr holds exactly the
+ * stream data, as written by other applications, and a zero-length
+ * xattr is an empty stream. Without the extra byte there is no room for
+ * the number of extents, so this can't be combined with extents.
+ *
+ * Above fgetxattr_multi() and fsetxattr_multi() values always carry the
+ * extra 0 byte, whichever format is on disk.
  */
 
 static char *streams_xattr_ext_name(TALLOC_CTX *mem_ctx,
@@ -115,7 +124,7 @@ static ssize_t fgetxattr_multi(const struct streams_xattr_config *config,
 	if (ret < 0) {
 		goto fail;
 	}
-	if ((ret == 0) || ((size_t)ret > fraglen)) {
+	if ((ret == 0 && !config->xattr_compat) || ((size_t)ret > fraglen)) {
 		errno = EINVAL;
 		goto fail;
 	}
@@ -123,8 +132,12 @@ static ssize_t fgetxattr_multi(const struct streams_xattr_config *config,
 
 	valuelen = ret;
 
-	marker = value[valuelen - 1];
-	valuelen -= 1; /* Re-add marker later */
+	if (!config->xattr_compat) {
+		marker = value[valuelen - 1];
+		valuelen -= 1; /* Re-add marker later */
+	} else {
+		marker = 0;
+	}
 
 	if (marker > config->max_extents) {
 		errno = EINVAL;
@@ -238,6 +251,23 @@ static int fsetxattr_multi(const struct streams_xattr_config *config,
 					    0);
 	if (xattr_name == NULL) {
 		errno = ENOMEM;
+		goto done;
+	}
+
+	if (config->xattr_compat) {
+		uint8_t marker = ((const char *)value)[size - 1];
+
+		if (marker != 0) {
+			errno = EINVAL;
+			goto done;
+		}
+		if (size - 1 > fraglen) {
+			errno = EOVERFLOW;
+			goto done;
+		}
+
+		/* Drop the marker, a zero-length xattr is an empty stream */
+		ret = SMB_VFS_FSETXATTR(fsp, xattr_name, value, size - 1, flags);
 		goto done;
 	}
 
@@ -1507,6 +1537,18 @@ static int streams_xattr_connect(vfs_handle_struct *handle,
 		return -1;
 	}
 	config->max_extents = max_xattrs - 1;
+
+	config->xattr_compat = lp_parm_bool(SNUM(handle->conn),
+					    "streams_xattr",
+					    "xattr_compat",
+					    false);
+	if (config->xattr_compat && (config->max_extents > 0)) {
+		DBG_WARNING("\"xattr_compat = yes\" can't be combined with "
+			    "\"max xattrs per stream\"=%d\n",
+			    max_xattrs);
+		errno = EINVAL;
+		return -1;
+	}
 
 	SMB_VFS_HANDLE_SET_DATA(handle, config,
 				NULL, struct stream_xattr_config,

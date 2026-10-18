@@ -106,6 +106,38 @@
 	    </listitem>
 	  </varlistentry>
 
+	  <varlistentry>
+	    <term>streams_xattr:xattr_compat = [yes|no]</term>
+	    <listitem>
+	      <para>By default the module stores one extra byte after
+	      the data of every stream it keeps in an xattr, and
+	      removes it again when reading. The byte allows for
+	      zero-length streams and holds the number of extents
+	      (see <command>streams_xattr:max xattrs per
+	      stream</command>). Extended attributes written by other
+	      applications don't have it.</para>
+	      <para>When enabled, the xattr holds exactly the stream
+	      data, and a zero-length xattr is an empty stream. This
+	      makes the streams compatible with extended attributes
+	      written and read by other applications, for example
+	      local applications, NFSv4 named attributes or netatalk,
+	      usually together with
+	      <command>streams_xattr:prefix = user.</command> and
+	      <command>streams_xattr:store_stream_type = no</command>.</para>
+	      <para>WARNING: this changes the on-disk format. Do not
+	      change it on a share that already holds streams: with
+	      <command>yes</command> streams written by Samba gain a
+	      trailing byte, with <command>no</command> xattrs
+	      written by other applications are not valid streams
+	      (or lose their last byte, if it is 0).</para>
+	      <para>Setting this to <command>yes</command> can't be
+	      combined with
+	      <command>streams_xattr:max xattrs per stream</command>
+	      greater than 1.</para>
+	      <para>The default is <command>no</command>.</para>
+	    </listitem>
+	  </varlistentry>
+
 	</variablelist>
 
 </refsect1>
