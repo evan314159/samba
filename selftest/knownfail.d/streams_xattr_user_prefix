@@ -1,2 +1,1 @@
-^samba3.vfs.streams_xattr_user_prefix.raw-xattr\(nt4_dc\)
 ^samba3.vfs.streams_xattr_user_prefix xattr_compat.raw-xattr\(nt4_dc\)
