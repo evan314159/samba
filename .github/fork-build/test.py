@@ -1,10 +1,10 @@
 """Runs smbd from the image with the cluster's share options and checks the bytes streams_xattr
 leaves on disk, so a module that doesn't load, or stores the wrong format, never gets pushed.
 
-[stock] is how the cluster's shares are set up (xattr_compat = no, Samba's default format: stream
-data plus a trailing 0 byte). [compat] is the same with xattr_compat = yes, streams stored as
-plain user.* xattrs. [refused] combines xattr_compat with extents, which smbd must refuse to
-connect.
+[compat] is how the cluster's shares are set up (xattr_compat = yes): streams are plain user.*
+xattrs, shared with NFS named attributes. [stock] is the same with Samba's default format, stream
+data plus a trailing 0 byte. [refused] combines xattr_compat = yes with extents, which smbd must
+refuse to connect.
 """
 
 import os
