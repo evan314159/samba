@@ -31,7 +31,7 @@ RUN cd /root/rpmbuild \
  && rpm2cpio /root/rpmbuild/RPMS/$(uname -m)/samba-${SAMBA_NVR}.$(uname -m).rpm \
     | cpio -idm --quiet ./usr/lib64/samba/vfs/streams_xattr.so
 
-FROM quay.io/samba.org/samba-server@sha256:a1b3088f94ac428487599a294de48bb481ff63bc36fa7fb1e80e0e3bd755c885 AS image
+FROM quay.io/samba.org/samba-server@sha256:c4f35a1a420fab74c2dc319b4b30106b2b27fc4ea7bf953af4185ef4e0718f6f AS image
 ARG SAMBA_NVR
 
 RUN v=$(rpm -q --qf '%{VERSION}-%{RELEASE}' samba) \
